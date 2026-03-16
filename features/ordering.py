@@ -1,5 +1,4 @@
-from rooms import rooms
-
+from features.rooms import rooms
 
 def get_next_sequence(room):
 

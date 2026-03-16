@@ -3,138 +3,145 @@ import ssl
 import threading
 import os
 
-SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 5000
+SERVER = "127.0.0.1"
+PORT = 5000
 
 BUFFER_SIZE = 4096
 
 
-def create_ssl_connection():
+def create_connection():
+
     context = ssl.create_default_context()
+
+    context.load_verify_locations("ssl/server.crt")
+
     context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
+    context.verify_mode = ssl.CERT_REQUIRED
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    secure_sock = context.wrap_socket(sock, server_hostname=SERVER_HOST)
-    secure_sock.connect((SERVER_HOST, SERVER_PORT))
+
+    secure_sock = context.wrap_socket(sock, server_hostname=SERVER)
+
+    secure_sock.connect((SERVER, PORT))
 
     return secure_sock
 
 
-def receive_messages(sock):
+def receive(sock):
+
     while True:
+
         try:
+
             data = sock.recv(BUFFER_SIZE)
+
             if not data:
-                print("Disconnected from server.")
                 break
 
-            message = data.decode()
+            msg = data.decode()
 
-            # Handle file reception
-            if message.startswith("FILE_INCOMING"):
-                _, filename, filesize = message.split("|")
-                filesize = int(filesize)
+            if msg.startswith("FILE_INCOMING"):
 
-                print(f"Receiving file: {filename}")
+                _, filename, size = msg.split("|")
+
+                size = int(size)
 
                 with open("received_" + filename, "wb") as f:
-                    remaining = filesize
+
+                    remaining = size
+
                     while remaining > 0:
+
                         chunk = sock.recv(min(BUFFER_SIZE, remaining))
+
                         f.write(chunk)
+
                         remaining -= len(chunk)
 
-                print("File received successfully.")
-            else:
-                print(message)
+                print("File received:", filename)
 
-        except Exception as e:
-            print("Error receiving data:", e)
+            else:
+                print(msg)
+
+        except:
             break
 
 
-def send_file(sock, filepath, room):
-    if not os.path.exists(filepath):
-        print("File not found.")
+def send_file(sock, path, room):
+
+    if not os.path.exists(path):
+        print("File not found")
         return
 
-    filesize = os.path.getsize(filepath)
-    filename = os.path.basename(filepath)
+    size = os.path.getsize(path)
 
-    metadata = f"FILE|{room}|{filename}|{filesize}"
-    sock.send(metadata.encode())
+    name = os.path.basename(path)
 
-    with open(filepath, "rb") as f:
+    sock.send(f"FILE|{room}|{name}|{size}".encode())
+
+    with open(path, "rb") as f:
+
         while True:
-            chunk = f.read(BUFFER_SIZE)
-            if not chunk:
-                break
-            sock.send(chunk)
 
-    print("File sent successfully.")
+            data = f.read(BUFFER_SIZE)
+
+            if not data:
+                break
+
+            sock.sendall(data)
 
 
 def main():
-    sock = create_ssl_connection()
 
-    username = input("Enter username: ")
-    sock.send(f"USERNAME|{username}".encode())
+    sock = create_connection()
 
-    threading.Thread(target=receive_messages, args=(sock,), daemon=True).start()
+    username = input("Username: ")
 
-    print("\nCommands:")
-    print("/join room_name")
-    print("/leave room_name")
-    print("/msg room_name message")
-    print("/private username message")
-    print("/file room_name filepath")
-    print("/quit\n")
+    sock.send(username.encode())
+
+    thread = threading.Thread(target=receive, args=(sock,))
+    thread.daemon = True
+    thread.start()
 
     while True:
-        command = input()
 
-        if command.startswith("/join"):
-            _, room = command.split()
+        cmd = input()
+
+        if cmd.startswith("/join"):
+
+            _, room = cmd.split()
+
             sock.send(f"JOIN|{room}".encode())
 
-        elif command.startswith("/leave"):
-            _, room = command.split()
+        elif cmd.startswith("/leave"):
+
+            _, room = cmd.split()
+
             sock.send(f"LEAVE|{room}".encode())
 
-        elif command.startswith("/msg"):
-            parts = command.split(" ", 2)
-            if len(parts) < 3:
-                print("Invalid command.")
-                continue
-            room = parts[1]
-            message = parts[2]
-            sock.send(f"MSG|{room}|{message}".encode())
+        elif cmd.startswith("/msg"):
 
-        elif command.startswith("/private"):
-            parts = command.split(" ", 2)
-            if len(parts) < 3:
-                print("Invalid command.")
-                continue
-            user = parts[1]
-            message = parts[2]
-            sock.send(f"PRIVATE|{user}|{message}".encode())
+            parts = cmd.split(" ", 2)
 
-        elif command.startswith("/file"):
-            parts = command.split(" ", 2)
-            if len(parts) < 3:
-                print("Invalid command.")
-                continue
-            room = parts[1]
-            filepath = parts[2]
-            send_file(sock, filepath, room)
+            sock.send(f"MSG|{parts[1]}|{parts[2]}".encode())
 
-        elif command == "/quit":
+        elif cmd.startswith("/private"):
+
+            parts = cmd.split(" ", 2)
+
+            sock.send(f"PRIVATE|{parts[1]}|{parts[2]}".encode())
+
+        elif cmd.startswith("/file"):
+
+            parts = cmd.split(" ", 2)
+
+            send_file(sock, parts[2], parts[1])
+
+        elif cmd == "/quit":
+
             sock.close()
-            break
 
-        else:
-            print("Unknown command.")
+            break
 
 
 if __name__ == "__main__":
