@@ -81,17 +81,26 @@ def handle_client(conn, addr):
 
                 filename = message["filename"]
                 size = message["size"]
+                room = message["room"]
 
-                receive_file(conn, filename, size)
+                # Save received files in a dedicated folder
+                os.makedirs("received_files", exist_ok=True)
+                save_path = os.path.join("received_files", filename)
 
-                clients = get_clients(message["room"])
+                receive_file(conn, save_path, size)
+
+                # Only forward if the sender is actually in the room
+                clients = get_clients(room)
 
                 for client in clients:
                     if client != conn:
-                        client.send(
-                            f"FILE_INCOMING|{filename}|{size}".encode()
-                        )
-                        send_file(client, filename)
+                        try:
+                            client.send(
+                                f"FILE_INCOMING|{filename}|{size}".encode()
+                            )
+                            send_file(client, save_path)
+                        except Exception as fe:
+                            print(f"Failed to forward file to a client: {fe}")
 
     except Exception as e:
         print("Error:", e)
@@ -103,28 +112,60 @@ def handle_client(conn, addr):
         conn.close()
 
 
+def shutdown_server(sock):
+    print("\n[Server] Shutting down...")
+
+    from connection_manager import clients as client_map
+
+    for username, conn in list(client_map.items()):
+        try:
+            conn.send("[Server] Server is shutting down.".encode())
+            conn.close()
+        except:
+            pass
+
+    try:
+        sock.close()
+    except:
+        pass
+
+    print("[Server] All connections closed. Goodbye!")
+
+
 def start_server():
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, PORT))
     sock.listen(10)
 
     ssl_context = create_ssl_context(CERT, KEY)
 
+    # Timeout lets accept() unblock every second so Ctrl+C is caught on Windows
+    sock.settimeout(1.0)
+
     print("Secure chat server running on port", PORT)
+    print("Press Ctrl+C to stop the server.\n")
 
-    while True:
+    try:
+        while True:
+            try:
+                client, addr = sock.accept()
+            except socket.timeout:
+                # No connection in last 1s — loop back and check for Ctrl+C
+                continue
 
-        client, addr = sock.accept()
+            secure_client = wrap_socket(ssl_context, client)
 
-        secure_client = wrap_socket(ssl_context, client)
+            thread = threading.Thread(
+                target=handle_client,
+                args=(secure_client, addr)
+            )
+            thread.daemon = True
+            thread.start()
 
-        thread = threading.Thread(
-            target=handle_client,
-            args=(secure_client, addr)
-        )
-
-        thread.start()
+    except KeyboardInterrupt:
+        shutdown_server(sock)
 
 
 if __name__ == "__main__":
