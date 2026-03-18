@@ -14,134 +14,149 @@ from features.file_transfer import receive_file, send_file
 
 HOST = "0.0.0.0"
 PORT = 5000
-
 CERT = "ssl/server.crt"
-KEY = "ssl/server.key"
-
+KEY  = "ssl/server.key"
 BUFFER_SIZE = 4096
+
+send_locks = {}
+send_locks_lock = threading.Lock()
+
+
+def get_send_lock(conn):
+    with send_locks_lock:
+        if conn not in send_locks:
+            send_locks[conn] = threading.Lock()
+        return send_locks[conn]
+
+
+def safe_send(conn, data):
+    lock = get_send_lock(conn)
+    with lock:
+        try:
+            conn.send(data)
+            return True
+        except Exception:
+            return False
 
 
 def broadcast(room, message):
-    clients = get_clients(room)
-
-    for client in clients:
-        try:
-            client.send(message.encode())
-        except:
-            pass
+    encoded = message.encode()
+    for client in get_clients(room):
+        safe_send(client, encoded)
 
 
 def handle_client(conn, addr):
     print("Connected:", addr)
-
     username = None
+    joined_rooms = set()
 
     try:
-        username = conn.recv(1024).decode().strip()
+        raw = conn.recv(1024).decode().strip()
+        username = raw.split("|")[-1] if raw.startswith("USERNAME|") else raw
 
-        if not register_client(username, conn):
-            conn.send("Username already taken".encode())
+        if not username:
             conn.close()
             return
 
-        conn.send("Connected to secure server".encode())
+        if not register_client(username, conn):
+            safe_send(conn, b"Username already taken")
+            conn.close()
+            return
+
+        safe_send(conn, b"Connected to secure server")
 
         while True:
-            data = conn.recv(BUFFER_SIZE)
-
-            if not data:
+            try:
+                data = conn.recv(BUFFER_SIZE)
+            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                # Client disconnected abruptly — normal during stress test
                 break
 
-            message = parse_message(data.decode())
+            if not data:
+                break  # clean disconnect
+
+            try:
+                message = parse_message(data.decode())
+            except Exception:
+                continue
 
             if message["type"] == "join":
                 join_room(conn, message["room"])
+                joined_rooms.add(message["room"])
 
             elif message["type"] == "leave":
                 leave_room(conn, message["room"])
+                joined_rooms.discard(message["room"])
 
             elif message["type"] == "message":
                 formatted = attach_sequence(
                     message["room"],
                     f"{username}: {message['content']}"
                 )
-
                 broadcast(message["room"], formatted)
 
             elif message["type"] == "private":
-
                 target = get_client(message["user"])
-
                 if target:
-                    target.send(
+                    safe_send(target,
                         f"[PRIVATE]{username}: {message['content']}".encode()
                     )
 
             elif message["type"] == "file":
-
                 filename = message["filename"]
-                size = message["size"]
-                room = message["room"]
-
-                # Save received files in a dedicated folder
+                size     = message["size"]
+                room     = message["room"]
                 os.makedirs("received_files", exist_ok=True)
                 save_path = os.path.join("received_files", filename)
-
                 receive_file(conn, save_path, size)
-
-                # Only forward if the sender is actually in the room
-                clients = get_clients(room)
-
-                for client in clients:
+                for client in get_clients(room):
                     if client != conn:
                         try:
-                            client.send(
+                            safe_send(client,
                                 f"FILE_INCOMING|{filename}|{size}".encode()
                             )
                             send_file(client, save_path)
                         except Exception as fe:
-                            print(f"Failed to forward file to a client: {fe}")
+                            print(f"File forward error: {fe}")
 
     except Exception as e:
-        print("Error:", e)
+        print("Unexpected error:", e)
 
     finally:
+        for room in joined_rooms:
+            leave_room(conn, room)
         if username:
             remove_client(username)
-
-        conn.close()
+        with send_locks_lock:
+            send_locks.pop(conn, None)
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def shutdown_server(sock):
     print("\n[Server] Shutting down...")
-
     from connection_manager import clients as client_map
-
-    for username, conn in list(client_map.items()):
+    for uname, conn in list(client_map.items()):
         try:
-            conn.send("[Server] Server is shutting down.".encode())
+            safe_send(conn, b"[Server] Server is shutting down.")
             conn.close()
-        except:
+        except Exception:
             pass
-
     try:
         sock.close()
-    except:
+    except Exception:
         pass
-
     print("[Server] All connections closed. Goodbye!")
 
 
 def start_server():
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, PORT))
-    sock.listen(10)
-
+    sock.listen(20)
     ssl_context = create_ssl_context(CERT, KEY)
-
-    # Timeout lets accept() unblock every second so Ctrl+C is caught on Windows
     sock.settimeout(1.0)
 
     print("Secure chat server running on port", PORT)
@@ -152,11 +167,8 @@ def start_server():
             try:
                 client, addr = sock.accept()
             except socket.timeout:
-                # No connection in last 1s — loop back and check for Ctrl+C
                 continue
-
             secure_client = wrap_socket(ssl_context, client)
-
             thread = threading.Thread(
                 target=handle_client,
                 args=(secure_client, addr)
