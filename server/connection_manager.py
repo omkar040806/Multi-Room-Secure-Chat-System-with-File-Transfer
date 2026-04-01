@@ -1,23 +1,30 @@
+# server/connection_manager.py
 import threading
 
-clients = {}
-lock = threading.Lock()
+clients: dict = {}
+_lock = threading.Lock()
 
 
-def register_client(username, conn):
-    with lock:
+def register_client(username: str, conn) -> bool:
+    """Atomically register *username*. Returns False if already taken."""
+    with _lock:
         if username in clients:
             return False
         clients[username] = conn
         return True
 
 
-def remove_client(username):
-    with lock:
-        if username in clients:
-            del clients[username]
+def remove_client(username: str) -> None:
+    with _lock:
+        clients.pop(username, None)
 
 
-def get_client(username):
-    with lock:
+def get_client(username: str):
+    with _lock:
         return clients.get(username)
+
+
+def all_clients() -> dict:
+    """Return a snapshot copy so callers don't hold the lock."""
+    with _lock:
+        return dict(clients)
