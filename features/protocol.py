@@ -1,5 +1,4 @@
 def parse_message(data):
-
     parts = data.strip().split("|")
     command = parts[0]
 
@@ -10,10 +9,18 @@ def parse_message(data):
         return {"type": "leave", "room": parts[1]}
 
     elif command == "MSG":
-        return {"type": "message", "room": parts[1], "content": parts[2]}
+        return {
+            "type": "message",
+            "room": parts[1],
+            "content": parts[2]
+        }
 
     elif command == "PRIVATE":
-        return {"type": "private", "user": parts[1], "content": parts[2]}
+        return {
+            "type": "private",
+            "user": parts[1],
+            "content": parts[2]
+        }
 
     elif command == "FILE":
         return {
