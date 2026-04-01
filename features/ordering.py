@@ -1,18 +1,7 @@
-from features.rooms import rooms
-
-def get_next_sequence(room):
-
-    if room not in rooms:
-        return 0
-
-    rooms[room]["sequence"] += 1
-    return rooms[room]["sequence"]
+# features/ordering.py
+from features.rooms import get_next_sequence
 
 
-def attach_sequence(room, message):
-
+def attach_sequence(room: str, message: str) -> str:
     seq = get_next_sequence(room)
-
-    formatted_message = f"[{room}][{seq}] {message}"
-
-    return formatted_message
+    return f"[{room}][{seq}] {message}"
