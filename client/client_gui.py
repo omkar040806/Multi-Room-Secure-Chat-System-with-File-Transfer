@@ -1,3 +1,4 @@
+from email.mime import text
 import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
 import threading
@@ -230,6 +231,7 @@ class ClientGUI(tk.Tk):
         self._username  = ""
         self._rooms     = []          # list of joined rooms
         self._active_room = tk.StringVar()
+        self._room_messages = {}   # room → list of (text, tag)
 
         self._apply_styles()
         self._build()
@@ -597,6 +599,19 @@ class ClientGUI(tk.Tk):
             self._append_msg(f"→ Joined #{room}\n", "ok")
             self._status(f"Joined #{room}")
 
+    def _refresh_chat(self):
+        self._msg_area.config(state="normal")
+        self._msg_area.delete("1.0", "end")
+
+        room = self._active_room.get()
+
+        if room in self._room_messages:
+            for text, tag in self._room_messages[room]:
+                self._msg_area.insert("end", text, tag)
+
+        self._msg_area.config(state="disabled")
+        self._msg_area.see("end")
+
     def _do_leave(self):
         sel = self._room_list.curselection()
         if not sel:
@@ -628,6 +643,7 @@ class ClientGUI(tk.Tk):
             room = self._rooms[sel[0]]
             self._active_room.set(room)
             self._room_title.config(text=f"# {room}", fg=TEXT)
+            self._refresh_chat()
 
     #  SEND
     def _do_send(self):
@@ -693,18 +709,35 @@ class ClientGUI(tk.Tk):
 
     def _route_message(self, kind, text):
         if kind == "normal":
-            # Parse [room][seq] who: text  format from server
             self._append_ts()
-            if ":" in text:
-                who, _, rest = text.partition(":")
-                # strip sequence prefix if present
-                if "]" in who:
-                    who = who.rsplit("]", 1)[-1].strip()
-                self._append_msg(who.strip(), "who")
-                self._append_msg(":" + rest + "\n", "normal")
+
+            if text.startswith("["):
+                try:
+                    room_part, rest = text[1:].split("][", 1)
+                    seq_str, remaining = rest.split("] ", 1)
+
+                    if ":" in remaining:
+                        who, _, msg = remaining.partition(":")
+                    else:
+                        who, msg = remaining, ""
+
+                    # Store message
+                    if room_part not in self._room_messages:
+                        self._room_messages[room_part] = []
+
+                    formatted = (f"[{room_part}] {who.strip()}: {msg}\n", "normal")
+                    self._room_messages[room_part].append(formatted)
+
+                    # Display ONLY if active room
+                    if room_part == self._active_room.get():
+                        self._append_msg(f"[{room_part}] ", "seq")
+                        self._append_msg(who.strip(), "who")
+                        self._append_msg(":" + msg + "\n", "normal")
+
+                except Exception:
+                    self._append_msg(text + "\n", "normal")
             else:
                 self._append_msg(text + "\n", "normal")
-
         elif kind == "private":
             self._append_ts()
             self._append_msg(f"[PRIVATE] {text}\n", "private")
